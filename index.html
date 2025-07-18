@@ -94,6 +94,7 @@
     const flowsEl = document.getElementById('flows');
     const totalEl = document.getElementById('total');
     const ctx = document.getElementById('flowChart').getContext('2d');
+    let chart = null;
 
     function formatFlow(value) {
       return Math.round(value).toLocaleString();
@@ -107,47 +108,50 @@
       return Math.floor(num / 100) * 100;
     }
 
-    const now = new Date();
-    const endDT = now.toISOString();
-    const startDT = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    async function fetchDataAndUpdate() {
+      const now = new Date();
+      const endDT = now.toISOString();
+      const startDT = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
-    Promise.all(siteIDs.map(id =>
-      fetch(`https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${id}&parameterCd=00060&startDT=${startDT}&endDT=${endDT}`)
-        .then(res => res.json())
-        .then(data => {
-          const ts = data.value.timeSeries;
-          if (!ts || ts.length === 0) return null;
-          const rawName = ts[0].sourceInfo.siteName;
-          const values = ts[0].values[0].value;
-          if (!values || values.length === 0) return null;
+      const sitesDataRaw = await Promise.all(siteIDs.map(id =>
+        fetch(`https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${id}&parameterCd=00060&startDT=${startDT}&endDT=${endDT}`)
+          .then(res => res.json())
+          .then(data => {
+            const ts = data.value.timeSeries;
+            if (!ts || ts.length === 0) return null;
+            const rawName = ts[0].sourceInfo.siteName;
+            const values = ts[0].values[0].value;
+            if (!values || values.length === 0) return null;
 
-          let latestFlow = null;
-          let latestIndex = null;
-          for (let i = values.length - 1; i >= 0; i--) {
-            if (values[i].value !== null && values[i].value !== undefined && values[i].value !== '') {
-              latestFlow = parseFloat(values[i].value);
-              latestIndex = i;
-              break;
+            let latestFlow = null;
+            let latestIndex = null;
+            for (let i = values.length - 1; i >= 0; i--) {
+              if (values[i].value !== null && values[i].value !== undefined && values[i].value !== '') {
+                latestFlow = parseFloat(values[i].value);
+                latestIndex = i;
+                break;
+              }
             }
-          }
-          if (latestFlow === null) return null;
+            if (latestFlow === null) return null;
 
-          const times = values.map(v => new Date(v.dateTime));
-          const flows = values.map(v => {
-            let val = parseFloat(v.value);
-            return isNaN(val) ? 0 : val;
-          });
+            const times = values.map(v => new Date(v.dateTime));
+            const flows = values.map(v => {
+              let val = parseFloat(v.value);
+              return isNaN(val) ? 0 : val;
+            });
 
-          const siteName = siteNames[id] || rawName;
+            const siteName = siteNames[id] || rawName;
 
-          return { siteName, latestFlow, latestIndex, times, flows };
-        })
-        .catch(() => null)
-    )).then(sitesDataRaw => {
+            return { siteName, latestFlow, latestIndex, times, flows };
+          })
+          .catch(() => null)
+      ));
+
       const sitesData = sitesDataRaw.filter(d => d !== null);
       if (sitesData.length === 0) {
         flowsEl.innerHTML = '<li>No valid data available.</li>';
         totalEl.textContent = '0';
+        if(chart) chart.destroy();
         return;
       }
 
@@ -156,7 +160,6 @@
       let priestFlow = 0;
       let priestSite = null;
 
-      // Separate priest site for last
       const otherSites = [];
       sitesData.forEach(site => {
         if (site.siteName === 'Priest River') {
@@ -167,18 +170,15 @@
         }
       });
 
-      // List all except Priest River first
       otherSites.forEach(site => {
         flowsEl.innerHTML += `<li><span class="site-name">${site.siteName}</span><span class="flow-value">${formatFlow(site.latestFlow)}</span><span class="unit">cfs</span></li>`;
         totalLatest += site.latestFlow;
       });
 
-      // Add Pack River (calculated) next
       const packFlow = Math.round(1.15 * priestFlow - 45);
       flowsEl.innerHTML += `<li><span class="site-name">Pack River (calculated)</span><span class="flow-value">${formatFlow(packFlow)}</span><span class="unit">cfs</span></li>`;
       totalLatest += packFlow;
 
-      // Add Priest River last
       if (priestSite) {
         flowsEl.innerHTML += `<li><span class="site-name">${priestSite.siteName}</span><span class="flow-value">${formatFlow(priestSite.latestFlow)}</span><span class="unit">cfs</span></li>`;
         totalLatest += priestSite.latestFlow;
@@ -196,7 +196,6 @@
         t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       );
 
-      // Calculate totalFlows including Pack River (calculated) at each timestamp
       const totalFlows = [];
       for (let i = 0; i <= minLatestIndex; i++) {
         let sum = 0;
@@ -213,7 +212,9 @@
       const minFlow = Math.min(...totalFlows);
       const maxFlow = Math.max(...totalFlows);
 
-      new Chart(ctx, {
+      if(chart) chart.destroy();
+
+      chart = new Chart(ctx, {
         type: 'line',
         data: {
           labels,
@@ -233,4 +234,27 @@
             y: {
               beginAtZero: false,
               min: Math.max(0, roundDownToNearest100(minFlow - 100)),
-              max:
+              max: roundUpToNearest100(maxFlow + 100),
+              title: { display: true, text: 'Flow (cfs)' },
+              ticks: {
+                callback: val => Math.round(val).toLocaleString()
+              }
+            },
+            x: {
+              title: { display: true, text: 'Time (last 24h)' }
+            }
+          },
+          interaction: { mode: 'nearest', axis: 'x', intersect: false },
+          plugins: { legend: { display: true } }
+        }
+      });
+    }
+
+    // Initial load
+    fetchDataAndUpdate();
+
+    // Refresh every 5 minutes (300000 ms)
+    setInterval(fetchDataAndUpdate, 300000);
+  </script>
+</body>
+</html>
