@@ -7,18 +7,20 @@
   <style>
     body {
       font-family: 'Arial', sans-serif;
-      text-align: center;
-      padding: 20px;
       font-weight: bold;
+      padding: 20px;
     }
     .flow-data {
       font-size: 1.4em;
       line-height: 2;
       white-space: pre;
+      text-align: left;
     }
     canvas {
       max-width: 100%;
       height: 300px !important;
+      display: block;
+      margin: 40px auto;
     }
     @media (max-width: 600px) {
       .flow-data {
@@ -30,7 +32,6 @@
 <body>
   <h2>USGS Flow Data</h2>
   <div class="flow-data" id="flowData"></div>
-  <br><br>
   <canvas id="flowChart"></canvas>
 
   <script>
@@ -47,19 +48,22 @@
       const json = await res.json();
       const values = json.value.timeSeries[0]?.values[0]?.value || [];
       const last = values[values.length - 1];
-      return last ? parseFloat(last.value) : 0;
+      return last ? Math.round(parseFloat(last.value)) : 0;
     }
 
     async function fetchChartData(site) {
       const res = await fetch(`https://waterservices.usgs.gov/nwis/iv/?sites=${site}&parameterCd=00060&siteStatus=all&format=json`);
       const json = await res.json();
       const values = json.value.timeSeries[0]?.values[0]?.value || [];
-      return values.map(v => ({ x: new Date(v.dateTime), y: parseFloat(v.value) }));
+      return values.map(v => ({
+        x: new Date(v.dateTime),
+        y: Math.round(parseFloat(v.value))
+      }));
     }
 
     async function updateFlowData() {
       const flowData = document.getElementById('flowData');
-      let text = '\n\n';
+      let text = '';
       let totalFlow = 0;
       let priestFlow = 0;
 
@@ -67,7 +71,7 @@
         const flow = await fetchFlow(site);
         if (site === '12395000') priestFlow = flow;
         totalFlow += flow;
-        text += `${name}: ${flow.toLocaleString(undefined, { maximumFractionDigits: 0 })} cfs\n`;
+        text += `${name}: ${flow.toLocaleString()} cfs\n`;
       }
 
       const packFlow = Math.round(1.15 * priestFlow - 45);
@@ -107,13 +111,18 @@
           responsive: true,
           maintainAspectRatio: false,
           scales: {
-            x: { type: 'time', time: { unit: 'hour' } },
+            x: {
+              type: 'time',
+              time: { unit: 'hour' },
+              title: { display: true, text: 'Time' }
+            },
             y: {
               min: yMin,
               max: yMax,
               ticks: {
                 callback: val => val.toLocaleString()
-              }
+              },
+              title: { display: true, text: 'Flow (cfs)' }
             }
           },
           plugins: {
