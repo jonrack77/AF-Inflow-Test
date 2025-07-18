@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>USGS Flow and AF Inflow</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 700px;
+      margin: auto;
+      padding: 0 10px;
+    }
+    #flows {
+      list-style: none;
+      padding: 0;
+      margin-bottom: 0.2em;
+      font-size: 1.3em;
+      font-family: Arial, sans-serif;
+      font-weight: bold;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      column-gap: 0.5em;
+      align-items: center;
+    }
+    #flows li {
+      margin: 0.2em 0;
+      display: contents;
+    }
+    #flows li span {
+      overflow-wrap: normal;
+    }
+    .site-name {
+      justify-self: start;
+    }
+    .flow-value {
+      justify-self: end;
+      min-width: 60px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .unit {
+      justify-self: start;
+      padding-left: 0.2em;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #333;
+      margin: 0.4em 0;
+      grid-column: 1 / 4;
+    }
+    h2 {
+      font-weight: bold;
+      font-size: 1.5em;
+      margin-top: 0.5em;
+    }
+    #spacer {
+      height: 2em;
+    }
+    canvas {
+      width: 100% !important;
+      height: 320px !important;
+    }
+  </style>
+</head>
+<body>
+  <h1>USGS Flow Data</h1>
+  <ul id="flows"></ul>
+  <hr>
+
+  <div id="spacer"></div>
+
+  <h2>AF Inflow: <span id="total">0</span> cfs</h2>
+
+  <canvas id="flowChart"></canvas>
+
+  <script>
+    const siteIDs = [
+      '12389000',
+      '12389500',
+      '12390700',
+      '12392155',
+      '12395000'
+    ];
+
+    const siteNames = {
+      '12389000': 'Clark Fork @ Plains',
+      '12389500': 'Thompson River',
+      '12390700': 'Prospect Creek',
+      '12392155': 'Lightning Creek',
+      '12395000': 'Priest River'
+    };
+
+    const flowsEl = document.getElementById('flows');
+    const totalEl = document.getElementById('total');
+    const ctx = document.getElementById('flowChart').getContext('2d');
+
+    function formatFlow(value) {
+      return Math.round(value).toLocaleString();
+    }
+
+    function roundUpToNearest100(num) {
+      return Math.ceil(num / 100) * 100;
+    }
+
+    function roundDownToNearest100(num) {
+      return Math.floor(num / 100) * 100;
+    }
+
+    const now = new Date();
+    const endDT = now.toISOString();
+    const startDT = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+
+    Promise.all(siteIDs.map(id =>
+      fetch(`https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${id}&parameterCd=00060&startDT=${startDT}&endDT=${endDT}`)
+        .then(res => res.json())
+        .then(data => {
+          const ts = data.value.timeSeries;
+          if (!ts || ts.length === 0) return null;
+          const rawName = ts[0].sourceInfo.siteName;
+          const values = ts[0].values[0].value;
+          if (!values || values.length === 0) return null;
+
+          let latestFlow = null;
+          let latestIndex = null;
+          for (let i = values.length - 1; i >= 0; i--) {
+            if (values[i].value !== null && values[i].value !== undefined && values[i].value !== '') {
+              latestFlow = parseFloat(values[i].value);
+              latestIndex = i;
+              break;
+            }
+          }
+          if (latestFlow === null) return null;
+
+          const times = values.map(v => new Date(v.dateTime));
+          const flows = values.map(v => {
+            let val = parseFloat(v.value);
+            return isNaN(val) ? 0 : val;
+          });
+
+          const siteName = siteNames[id] || rawName;
+
+          return { siteName, latestFlow, latestIndex, times, flows };
+        })
+        .catch(() => null)
+    )).then(sitesDataRaw => {
+      const sitesData = sitesDataRaw.filter(d => d !== null);
+      if (sitesData.length === 0) {
+        flowsEl.innerHTML = '<li>No valid data available.</li>';
+        totalEl.textContent = '0';
+        return;
+      }
+
+      flowsEl.innerHTML = '';
+      let totalLatest = 0;
+      sitesData.forEach(site => {
+        flowsEl.innerHTML += `<li><span class="site-name">${site.siteName}</span><span class="flow-value">${formatFlow(site.latestFlow)}</span><span class="unit">cfs</span></li>`;
+        totalLatest += site.latestFlow;
+      });
+
+      if (!flowsEl.nextElementSibling || flowsEl.nextElementSibling.tagName !== 'HR') {
+        const hr = document.createElement('hr');
+        flowsEl.parentNode.insertBefore(hr, totalEl.parentNode);
+      }
+      totalEl.textContent = formatFlow(totalLatest);
+
+      const minLatestIndex = Math.min(...sitesData.map(site => site.latestIndex));
+
+      const labels = sitesData[0].times.slice(0, minLatestIndex + 1).map(t =>
+        t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      );
+
+      const totalFlows = [];
+      for (let i = 0; i <= minLatestIndex; i++) {
+        let sum = 0;
+        sitesData.forEach(site => {
+          sum += site.flows[i] || 0;
+        });
+        totalFlows.push(Math.round(sum));
+      }
+
+      const minFlow = Math.min(...totalFlows);
+      const maxFlow = Math.max(...totalFlows);
+
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'AF Inflow (cfs)',
+            data: totalFlows,
+            borderColor: 'rgb(54, 162, 235)',
+            backgroundColor: 'transparent',
+            fill: false,
+            tension: 0.3,
+            pointRadius: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: {
+              beginAtZero: false,
+              min: Math.max(0, roundDownToNearest100(minFlow - 100)),
+              max: roundUpToNearest100(maxFlow + 100),
+              title: { display: true, text: 'Flow (cfs)' }
+            },
+            x: {
+              title: { display: true, text: 'Time (last 24h)' }
+            }
+          },
+          interaction: { mode: 'nearest', axis: 'x', intersect: false },
+          plugins: { legend: { display: true } }
+        }
+      });
+    });
+  </script>
+</body>
+</html>
