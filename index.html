@@ -154,17 +154,35 @@
       flowsEl.innerHTML = '';
       let totalLatest = 0;
       let priestFlow = 0;
+      let priestSite = null;
 
+      // Separate priest site for last
+      const otherSites = [];
       sitesData.forEach(site => {
-        flowsEl.innerHTML += `<li><span class="site-name">${site.siteName}</span><span class="flow-value">${formatFlow(site.latestFlow)}</span><span class="unit">cfs</span></li>`;
-        totalLatest += site.latestFlow;
-        if (site.siteName === 'Priest River') priestFlow = site.latestFlow;
+        if (site.siteName === 'Priest River') {
+          priestFlow = site.latestFlow;
+          priestSite = site;
+        } else {
+          otherSites.push(site);
+        }
       });
 
-      // Calculate Pack River (calculated)
+      // List all except Priest River first
+      otherSites.forEach(site => {
+        flowsEl.innerHTML += `<li><span class="site-name">${site.siteName}</span><span class="flow-value">${formatFlow(site.latestFlow)}</span><span class="unit">cfs</span></li>`;
+        totalLatest += site.latestFlow;
+      });
+
+      // Add Pack River (calculated) next
       const packFlow = Math.round(1.15 * priestFlow - 45);
-      totalLatest += packFlow;
       flowsEl.innerHTML += `<li><span class="site-name">Pack River (calculated)</span><span class="flow-value">${formatFlow(packFlow)}</span><span class="unit">cfs</span></li>`;
+      totalLatest += packFlow;
+
+      // Add Priest River last
+      if (priestSite) {
+        flowsEl.innerHTML += `<li><span class="site-name">${priestSite.siteName}</span><span class="flow-value">${formatFlow(priestSite.latestFlow)}</span><span class="unit">cfs</span></li>`;
+        totalLatest += priestSite.latestFlow;
+      }
 
       if (!flowsEl.nextElementSibling || flowsEl.nextElementSibling.tagName !== 'HR') {
         const hr = document.createElement('hr');
@@ -215,21 +233,4 @@
             y: {
               beginAtZero: false,
               min: Math.max(0, roundDownToNearest100(minFlow - 100)),
-              max: roundUpToNearest100(maxFlow + 100),
-              title: { display: true, text: 'Flow (cfs)' },
-              ticks: {
-                callback: val => Math.round(val).toLocaleString()
-              }
-            },
-            x: {
-              title: { display: true, text: 'Time (last 24h)' }
-            }
-          },
-          interaction: { mode: 'nearest', axis: 'x', intersect: false },
-          plugins: { legend: { display: true } }
-        }
-      });
-    });
-  </script>
-</body>
-</html>
+              max:
