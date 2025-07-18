@@ -1,141 +1,235 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>USGS Flow Data</title>
+  <title>USGS Flow and AF Inflow</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
   <style>
     body {
-      font-family: 'Arial', sans-serif;
-      font-weight: bold;
-      padding: 20px;
+      font-family: Arial, sans-serif;
+      max-width: 700px;
+      margin: auto;
+      padding: 0 10px;
     }
-    .flow-data {
-      font-size: 1.4em;
-      line-height: 2;
-      white-space: pre;
-      text-align: left;
+    #flows {
+      list-style: none;
+      padding: 0;
+      margin-bottom: 0.2em;
+      font-size: 1.3em;
+      font-family: Arial, sans-serif;
+      font-weight: bold;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      column-gap: 0.5em;
+      align-items: center;
+    }
+    #flows li {
+      margin: 0.2em 0;
+      display: contents;
+    }
+    #flows li span {
+      overflow-wrap: normal;
+    }
+    .site-name {
+      justify-self: start;
+    }
+    .flow-value {
+      justify-self: end;
+      min-width: 60px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .unit {
+      justify-self: start;
+      padding-left: 0.2em;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #333;
+      margin: 0.4em 0;
+      grid-column: 1 / 4;
+    }
+    h2 {
+      font-weight: bold;
+      font-size: 1.5em;
+      margin-top: 0.5em;
+    }
+    #spacer {
+      height: 2em;
     }
     canvas {
-      max-width: 100%;
-      height: 300px !important;
-      display: block;
-      margin: 40px auto;
-    }
-    @media (max-width: 600px) {
-      .flow-data {
-        font-size: 1.8em;
-      }
+      width: 100% !important;
+      height: 320px !important;
     }
   </style>
 </head>
 <body>
-  <h2>USGS Flow Data</h2>
-  <div class="flow-data" id="flowData"></div>
+  <h1>USGS Flow Data</h1>
+  <ul id="flows"></ul>
+  <hr>
+
+  <div id="spacer"></div>
+
+  <h2>AF Inflow: <span id="total">0</span> cfs</h2>
+
   <canvas id="flowChart"></canvas>
 
   <script>
-    const siteIDs = {
-      '12389000': 'Clark Fork @ Plains     ',
-      '12389500': 'Thompson River          ',
-      '12390700': 'Prospect Creek          ',
-      '12392155': 'Lightning Creek         ',
-      '12395000': 'Priest River            '
+    const siteIDs = [
+      '12389000',
+      '12389500',
+      '12390700',
+      '12392155',
+      '12395000'
+    ];
+
+    const siteNames = {
+      '12389000': 'Clark Fork @ Plains',
+      '12389500': 'Thompson River',
+      '12390700': 'Prospect Creek',
+      '12392155': 'Lightning Creek',
+      '12395000': 'Priest River'
     };
 
-    async function fetchFlow(site) {
-      const res = await fetch(`https://waterservices.usgs.gov/nwis/iv/?sites=${site}&parameterCd=00060&siteStatus=all&format=json`);
-      const json = await res.json();
-      const values = json.value.timeSeries[0]?.values[0]?.value || [];
-      const last = values[values.length - 1];
-      return last ? Math.round(parseFloat(last.value)) : 0;
+    const flowsEl = document.getElementById('flows');
+    const totalEl = document.getElementById('total');
+    const ctx = document.getElementById('flowChart').getContext('2d');
+
+    function formatFlow(value) {
+      return Math.round(value).toLocaleString();
     }
 
-    async function fetchChartData(site) {
-      const res = await fetch(`https://waterservices.usgs.gov/nwis/iv/?sites=${site}&parameterCd=00060&siteStatus=all&format=json`);
-      const json = await res.json();
-      const values = json.value.timeSeries[0]?.values[0]?.value || [];
-      return values.map(v => ({
-        x: new Date(v.dateTime),
-        y: Math.round(parseFloat(v.value))
-      }));
+    function roundUpToNearest100(num) {
+      return Math.ceil(num / 100) * 100;
     }
 
-    async function updateFlowData() {
-      const flowData = document.getElementById('flowData');
-      let text = '';
-      let totalFlow = 0;
-      let priestFlow = 0;
+    function roundDownToNearest100(num) {
+      return Math.floor(num / 100) * 100;
+    }
 
-      for (const [site, name] of Object.entries(siteIDs)) {
-        const flow = await fetchFlow(site);
-        if (site === '12395000') priestFlow = flow;
-        totalFlow += flow;
-        text += `${name}: ${flow.toLocaleString()} cfs\n`;
+    const now = new Date();
+    const endDT = now.toISOString();
+    const startDT = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+
+    Promise.all(siteIDs.map(id =>
+      fetch(`https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${id}&parameterCd=00060&startDT=${startDT}&endDT=${endDT}`)
+        .then(res => res.json())
+        .then(data => {
+          const ts = data.value.timeSeries;
+          if (!ts || ts.length === 0) return null;
+          const rawName = ts[0].sourceInfo.siteName;
+          const values = ts[0].values[0].value;
+          if (!values || values.length === 0) return null;
+
+          let latestFlow = null;
+          let latestIndex = null;
+          for (let i = values.length - 1; i >= 0; i--) {
+            if (values[i].value !== null && values[i].value !== undefined && values[i].value !== '') {
+              latestFlow = parseFloat(values[i].value);
+              latestIndex = i;
+              break;
+            }
+          }
+          if (latestFlow === null) return null;
+
+          const times = values.map(v => new Date(v.dateTime));
+          const flows = values.map(v => {
+            let val = parseFloat(v.value);
+            return isNaN(val) ? 0 : val;
+          });
+
+          const siteName = siteNames[id] || rawName;
+
+          return { siteName, latestFlow, latestIndex, times, flows };
+        })
+        .catch(() => null)
+    )).then(sitesDataRaw => {
+      const sitesData = sitesDataRaw.filter(d => d !== null);
+      if (sitesData.length === 0) {
+        flowsEl.innerHTML = '<li>No valid data available.</li>';
+        totalEl.textContent = '0';
+        return;
       }
 
+      flowsEl.innerHTML = '';
+      let totalLatest = 0;
+      let priestFlow = 0;
+
+      sitesData.forEach(site => {
+        flowsEl.innerHTML += `<li><span class="site-name">${site.siteName}</span><span class="flow-value">${formatFlow(site.latestFlow)}</span><span class="unit">cfs</span></li>`;
+        totalLatest += site.latestFlow;
+        if (site.siteName === 'Priest River') priestFlow = site.latestFlow;
+      });
+
+      // Calculate Pack River (calculated)
       const packFlow = Math.round(1.15 * priestFlow - 45);
-      totalFlow += packFlow;
-      text += `Pack River (calculated) : ${packFlow.toLocaleString()} cfs\n`;
-      text += '------------------------------\n';
-      text += `AF Inflow: ${totalFlow.toLocaleString()} cfs`;
+      totalLatest += packFlow;
+      flowsEl.innerHTML += `<li><span class="site-name">Pack River (calculated)</span><span class="flow-value">${formatFlow(packFlow)}</span><span class="unit">cfs</span></li>`;
 
-      flowData.textContent = text;
-      return { priestFlow };
-    }
+      if (!flowsEl.nextElementSibling || flowsEl.nextElementSibling.tagName !== 'HR') {
+        const hr = document.createElement('hr');
+        flowsEl.parentNode.insertBefore(hr, totalEl.parentNode);
+      }
+      totalEl.textContent = formatFlow(totalLatest);
 
-    async function drawChart(priestFlow) {
-      const data = await fetchChartData('12395000');
-      const calculatedData = data.map(p => ({
-        x: p.x,
-        y: Math.round(1.15 * p.y - 45)
-      }));
+      const minLatestIndex = Math.min(...sitesData.map(site => site.latestIndex));
 
-      const yVals = calculatedData.map(p => p.y);
-      const yMax = Math.ceil((Math.max(...yVals) + 100) / 100) * 100;
-      const yMin = Math.floor((Math.min(...yVals) - 100) / 100) * 100;
+      const labels = sitesData[0].times.slice(0, minLatestIndex + 1).map(t =>
+        t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      );
 
-      new Chart(document.getElementById('flowChart').getContext('2d'), {
+      // Calculate totalFlows including Pack River (calculated) at each timestamp
+      const totalFlows = [];
+      for (let i = 0; i <= minLatestIndex; i++) {
+        let sum = 0;
+        let priestVal = 0;
+        sitesData.forEach(site => {
+          sum += site.flows[i] || 0;
+          if (site.siteName === 'Priest River') priestVal = site.flows[i] || 0;
+        });
+        const packVal = Math.round(1.15 * priestVal - 45);
+        sum += packVal;
+        totalFlows.push(Math.round(sum));
+      }
+
+      const minFlow = Math.min(...totalFlows);
+      const maxFlow = Math.max(...totalFlows);
+
+      new Chart(ctx, {
         type: 'line',
         data: {
+          labels,
           datasets: [{
-            label: 'Pack River (calculated)',
-            data: calculatedData,
-            borderColor: 'blue',
-            borderWidth: 2,
-            pointRadius: 0,
-            fill: false
+            label: 'AF Inflow (cfs)',
+            data: totalFlows,
+            borderColor: 'rgb(54, 162, 235)',
+            backgroundColor: 'transparent',
+            fill: false,
+            tension: 0.3,
+            pointRadius: 0
           }]
         },
         options: {
           responsive: true,
-          maintainAspectRatio: false,
           scales: {
-            x: {
-              type: 'time',
-              time: { unit: 'hour' },
-              title: { display: true, text: 'Time' }
-            },
             y: {
-              min: yMin,
-              max: yMax,
+              beginAtZero: false,
+              min: Math.max(0, roundDownToNearest100(minFlow - 100)),
+              max: roundUpToNearest100(maxFlow + 100),
+              title: { display: true, text: 'Flow (cfs)' },
               ticks: {
-                callback: val => val.toLocaleString()
-              },
-              title: { display: true, text: 'Flow (cfs)' }
+                callback: val => Math.round(val).toLocaleString()
+              }
+            },
+            x: {
+              title: { display: true, text: 'Time (last 24h)' }
             }
           },
-          plugins: {
-            legend: { display: false }
-          }
+          interaction: { mode: 'nearest', axis: 'x', intersect: false },
+          plugins: { legend: { display: true } }
         }
       });
-    }
-
-    (async () => {
-      const { priestFlow } = await updateFlowData();
-      await drawChart(priestFlow);
-    })();
+    });
   </script>
 </body>
 </html>
