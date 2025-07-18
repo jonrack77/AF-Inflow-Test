@@ -175,7 +175,7 @@
         totalLatest += site.latestFlow;
       });
 
-      const packFlow = Math.round(1.15 * priestFlow - 45);
+      const packFlow = Math.round(.281079 * priestFlow);
       flowsEl.innerHTML += `<li><span class="site-name">Pack River (calculated)</span><span class="flow-value">${formatFlow(packFlow)}</span><span class="unit">cfs</span></li>`;
       totalLatest += packFlow;
 
